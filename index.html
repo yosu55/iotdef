@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StreetTrack IoT</title>
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0f172a;--card:#1e293b;--orange:#f97316;--green:#10b981;--red:#ef4444;--blue:#38bdf8;}
+*{box-sizing:border-box;}
+body{font-family:'Poppins',sans-serif;background:var(--bg);color:#fff;margin:0;padding:15px;display:flex;justify-content:center;}
+.app{width:100%;max-width:420px;}
+h2{color:var(--orange);text-align:center;}
+.card{background:var(--card);border-radius:16px;padding:18px;margin-bottom:14px;border:1px solid rgba(255,255,255,.1);}
+.prod{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.07);}
+.prod:last-child{border-bottom:none;}
+.prod-info{font-size:.85em;}
+.prod-nombre{font-weight:600;}
+.prod-precio{color:var(--orange);font-size:.8em;}
+.stock-badge{font-size:.7em;padding:2px 8px;border-radius:10px;background:#334155;margin-left:6px;}
+.stock-ok{background:#065f46;color:#6ee7b7;}
+.stock-low{background:#7c2d12;color:#fdba74;}
+.stock-out{background:#7f1d1d;color:#fca5a5;}
+.qty{display:flex;align-items:center;gap:8px;}
+.qty button{background:#334155;color:#fff;border:none;width:30px;height:30px;border-radius:8px;font-size:1.1em;cursor:pointer;}
+.qty span{min-width:22px;text-align:center;font-weight:600;}
+.btn{width:100%;padding:12px;border:none;border-radius:10px;font-weight:600;cursor:pointer;color:#fff;margin-top:8px;font-size:.9em;}
+.btn-orange{background:var(--orange);}
+.btn-green{background:var(--green);}
+.btn-red{background:var(--red);}
+.btn-blue{background:var(--blue);color:#0f172a;}
+.status{text-align:center;font-weight:bold;padding:12px;background:#020617;border-radius:8px;margin-top:10px;color:var(--blue);font-size:.8em;}
+.hidden{display:none;}
+.geo{font-size:.75em;color:#94a3b8;margin-top:6px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="app">
+  <h2>📍 StreetTrack IoT</h2>
+
+  <div class="card">
+    <h3 style="margin-top:0;">🛒 Hacer Pedido</h3>
+    <div id="lista-productos">Cargando...</div>
+    <div class="geo" id="geo-info">📍 Obteniendo ubicación...</div>
+    <button class="btn btn-blue" onclick="actualizarStock()">🔄 Actualizar stock</button>
+    <div id="estado-cliente" class="status">Elige un producto</div>
+  </div>
+
+  <div id="panel-vendedor" class="card hidden">
+    <h3 style="color:var(--orange);margin-top:0;">🔔 Pedido Recibido</h3>
+    <div id="pedido-info"></div>
+    <button class="btn btn-green" onclick="responder(true)">✅ Aceptar</button>
+    <button class="btn btn-red" onclick="responder(false)">❌ Rechazar</button>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  CAMBIA ESTA IP por la IP real de tu ESP32 (la que muestra
+//  el Monitor Serie). Usa http:// NO https://
+// ============================================================
+const BASE_URL = "http://192.168.0.16";
+
+let coords = {lat: null, lng: null};
+let cantidades = {};
+
+function obtenerUbicacion() {
+  const info = document.getElementById('geo-info');
+  if (!navigator.geolocation) {
+    info.innerText = "⚠️ GPS no disponible";
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      coords.lat = pos.coords.latitude;
+      coords.lng = pos.coords.longitude;
+      info.innerText = '📍 ' + coords.lat.toFixed(5) + ', ' + coords.lng.toFixed(5) + ' (±' + Math.round(pos.coords.accuracy) + 'm)';
+    },
+    err => { info.innerText = "⚠️ No se pudo obtener ubicación: " + err.message; },
+    {enableHighAccuracy: true, timeout: 10000}
+  );
+}
+
+function actualizarStock() {
+  fetch(BASE_URL + '/api/stock')
+    .then(r => r.json())
+    .then(data => renderProductos(data))
+    .catch(e => {
+      console.error(e);
+      document.getElementById('estado-cliente').innerText = "⚠️ No se pudo conectar al ESP32";
+    });
+}
+
+function renderProductos(lista) {
+  const cont = document.getElementById('lista-productos');
+  cont.innerHTML = '';
+  lista.forEach(p => {
+    if (!(p.id in cantidades)) cantidades[p.id] = 1;
+    const claseStock = p.stock === 0 ? 'stock-out' : (p.stock < 5 ? 'stock-low' : 'stock-ok');
+    const div = document.createElement('div');
+    div.className = 'prod';
+    div.innerHTML =
+      '<div class="prod-info">' +
+        '<div class="prod-nombre">' + p.nombre +
+          '<span class="stock-badge ' + claseStock + '">' + p.stock + ' disp.</span>' +
+        '</div>' +
+        '<div class="prod-precio">' + p.precio.toFixed(2) + ' Bs.</div>' +
+      '</div>' +
+      '<div class="qty">' +
+        '<button onclick="cambiarCantidad(\'' + p.id + '\',-1)">−</button>' +
+        '<span id="qty-' + p.id + '">' + cantidades[p.id] + '</span>' +
+        '<button onclick="cambiarCantidad(\'' + p.id + '\',1)">+</button>' +
+        '<button class="btn-orange" style="width:auto;padding:6px 10px;margin:0;"' +
+                ' onclick="pedir(\'' + p.id + '\')" ' + (p.stock===0?'disabled':'') + '>Pedir</button>' +
+      '</div>';
+    cont.appendChild(div);
+  });
+}
+
+function cambiarCantidad(id, delta) {
+  cantidades[id] = Math.max(1, (cantidades[id] || 1) + delta);
+  document.getElementById('qty-' + id).innerText = cantidades[id];
+}
+
+function pedir(idProducto) {
+  const estado = document.getElementById('estado-cliente');
+  if (coords.lat === null) {
+    estado.innerText = "⚠️ Esperando ubicación GPS...";
+    return;
+  }
+  estado.innerText = "Enviando pedido...";
+  const qty = cantidades[idProducto];
+  const url = BASE_URL + '/api/pedir?id=' + idProducto + '&cant=' + qty +
+              '&lat=' + coords.lat + '&lng=' + coords.lng;
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok) {
+        estado.innerText = '✅ Pedido enviado: ' + data.nombre + ' x' + qty + ' — Total ' + data.total.toFixed(2) + ' Bs.';
+        mostrarPanelVendedor(data);
+        actualizarStock();
+      } else {
+        estado.innerText = "❌ " + data.error;
+      }
+    })
+    .catch(() => estado.innerText = "❌ Error de conexión con el ESP32");
+}
+
+function mostrarPanelVendedor(d) {
+  document.getElementById('panel-vendedor').classList.remove('hidden');
+  document.getElementById('pedido-info').innerHTML =
+    '<strong>Producto:</strong> ' + d.nombre + '<br>' +
+    '<strong>Cantidad:</strong> ' + d.cantidad + '<br>' +
+    '<strong>Precio unit.:</strong> ' + d.precioUnit.toFixed(2) + ' Bs.<br>' +
+    '<strong>TOTAL:</strong> <span style="color:var(--orange);font-size:1.2em;">' + d.total.toFixed(2) + ' Bs.</span><br>' +
+    '<strong>Distancia:</strong> ' + d.distancia.toFixed(0) + ' metros<br>' +
+    '<strong>Ubicación cliente:</strong> <a style="color:var(--blue);" target="_blank"' +
+       ' href="https://www.google.com/maps?q=' + d.lat + ',' + d.lng + '">Ver en mapa</a>';
+}
+
+function responder(aceptado) {
+  const estado = aceptado ? 'ACEPTADO' : 'RECHAZADO';
+  fetch(BASE_URL + '/api/responder?estado=' + estado)
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('estado-cliente').innerText = "Pedido: " + estado;
+      document.getElementById('panel-vendedor').classList.add('hidden');
+      actualizarStock();
+    })
+    .catch(() => document.getElementById('estado-cliente').innerText = "❌ Error al responder");
+}
+
+obtenerUbicacion();
+actualizarStock();
+</script>
+</body>
+</html>
